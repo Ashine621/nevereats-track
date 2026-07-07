@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<!-- Disguise: the link card a friend receives must read like a real order. -->
+<title>外卖配送中 · 订单实时跟踪</title>
+<meta property="og:title" content="你的外卖正在配送中">
+<meta property="og:description" content="骑手已接单，点击查看实时位置 →">
+<style>
+  :root {
+    --brand: #f24237; --brand-dark: #d12e24;
+    --ink: #1a1a1f; --sub: #5c5c66;
+    --cream: #fdfbf7; --card: #ffffff; --chip: #f4f4f7; --stroke: #e6e6ea;
+    --ghost: #8f5cdb; --ghost-glow: #c79ef8;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body { font-family: -apple-system, "PingFang SC", "Helvetica Neue", sans-serif;
+         background: var(--cream); color: var(--ink); max-width: 480px; margin: 0 auto;
+         min-height: 100vh; overflow-x: hidden; }
+
+  /* ---------- map ---------- */
+  #mapWrap { position: relative; height: 46vh; min-height: 300px; overflow: hidden;
+             background: #eceae2; transition: filter 1.2s ease; }
+  #mapWrap.dead { filter: grayscale(1) brightness(.92); }
+  #map { width: 100%; height: 100%; display: block; }
+  .pin { position: absolute; transform: translate(-50%, -50%); z-index: 3;
+         width: 34px; height: 34px; border-radius: 50%; background: #fff;
+         box-shadow: 0 3px 10px rgba(0,0,0,.22); display: flex; align-items: center;
+         justify-content: center; font-size: 16px; }
+  #courier { width: 42px; height: 42px; font-size: 22px; border: 2.5px solid var(--brand);
+             z-index: 4; transition: left .9s linear, top .9s linear; }
+  #courier.vanish { animation: poof 1.6s ease forwards; }
+  @keyframes poof {
+    0%   { transform: translate(-50%,-50%) scale(1); opacity: 1; }
+    45%  { transform: translate(-50%,-110%) scale(1.25) rotate(-8deg); opacity: .95; }
+    100% { transform: translate(-50%,-260%) scale(.6) rotate(10deg); opacity: 0; }
+  }
+  #liveBadge { position: absolute; top: 14px; left: 14px; z-index: 5;
+               background: rgba(255,255,255,.92); border-radius: 999px; padding: 6px 12px;
+               font-size: 12px; font-weight: 700; color: var(--ink);
+               box-shadow: 0 2px 8px rgba(0,0,0,.12); display: flex; gap: 6px; align-items: center; }
+  #liveDot { width: 8px; height: 8px; border-radius: 50%; background: #e33; animation: blink 1.2s infinite; }
+  @keyframes blink { 50% { opacity: .25; } }
+
+  /* ---------- tracking sheet ---------- */
+  #sheet { background: var(--cream); border-radius: 26px 26px 0 0; margin-top: -26px;
+           position: relative; z-index: 6; padding: 20px 20px 40px;
+           box-shadow: 0 -8px 30px rgba(0,0,0,.08); }
+  .handle { width: 44px; height: 5px; border-radius: 3px; background: #d9d7d0; margin: 0 auto 16px; }
+  .label { font-size: 11px; font-weight: 800; letter-spacing: 1.5px; color: var(--sub); }
+  #arrive { font-size: 40px; font-weight: 900; font-family: Georgia, "Songti SC", serif; }
+  #etaSub { font-size: 14px; font-weight: 600; color: var(--sub); margin-left: 6px; }
+
+  #bar { display: flex; gap: 5px; margin: 16px 0 18px; }
+  .seg { height: 6px; border-radius: 3px; background: var(--chip); position: relative; overflow: hidden; }
+  .seg > i { position: absolute; inset: 0; width: 0%; background: var(--brand);
+             border-radius: 3px; transition: width .8s linear; display: block; }
+
+  .stageRow { display: flex; align-items: center; gap: 10px; }
+  #stageIcon { width: 30px; height: 30px; border-radius: 50%; background: var(--brand); color: #fff;
+               display: flex; align-items: center; justify-content: center; font-size: 14px; }
+  #stageTitle { font-size: 17px; font-weight: 800; flex: 1; }
+  #stageStep { font-size: 12px; font-weight: 600; color: var(--sub); }
+  #quip { margin-top: 12px; background: var(--chip); border-radius: 12px; padding: 11px 13px;
+          font-size: 13px; font-weight: 600; color: var(--ink); transition: opacity .4s; }
+
+  .card { background: var(--card); border: 1px solid var(--stroke); border-radius: 18px;
+          padding: 14px; margin-top: 14px; }
+  .courierRow { display: flex; align-items: center; gap: 12px; }
+  .courierAvatar { width: 48px; height: 48px; border-radius: 50%; background: var(--chip);
+                   display: flex; align-items: center; justify-content: center; font-size: 26px; }
+  .courierName { font-size: 15px; font-weight: 800; }
+  .courierMeta { font-size: 12px; color: var(--sub); margin-top: 2px; }
+  .stars { margin-left: auto; font-size: 13px; font-weight: 800; }
+  .itemRow { display: flex; font-size: 14px; padding: 4px 0; }
+  .itemRow .n { flex: 1; }
+  .totalRow { display: flex; font-size: 15px; font-weight: 800; border-top: 1px solid var(--stroke);
+              margin-top: 8px; padding-top: 10px; }
+  .totalRow .n { flex: 1; color: var(--sub); font-weight: 600; }
+  #restName { font-size: 15px; font-weight: 800; margin-bottom: 6px; }
+
+  /* ---------- reveal ---------- */
+  #reveal { position: fixed; inset: 0; z-index: 50; display: none; flex-direction: column;
+            align-items: center; justify-content: center; text-align: center; padding: 30px 26px;
+            background: linear-gradient(175deg, #170d33 0%, #33155c 55%, #571f70 100%);
+            color: #fff; opacity: 0; transition: opacity .9s ease; overflow-y: auto; }
+  #reveal.on { display: flex; }
+  #reveal.show { opacity: 1; }
+  #ghostBig { font-size: 96px; animation: float 2.4s ease-in-out infinite; }
+  @keyframes float { 50% { transform: translateY(-12px); } }
+  #rvTitle { font-size: 30px; font-weight: 900; font-family: Georgia, "Songti SC", serif; margin-top: 10px; }
+  #rvSub { font-size: 16px; opacity: .88; margin-top: 10px; line-height: 1.6; }
+  #rvStat { margin-top: 18px; background: rgba(255,255,255,.1); border: 1px solid rgba(255,255,255,.16);
+            padding: 12px 18px; border-radius: 14px; font-size: 14px; font-weight: 700; }
+  .rvBtn { display: block; width: 100%; max-width: 340px; margin-top: 12px; padding: 16px;
+           border-radius: 16px; border: none; font-size: 16px; font-weight: 800; cursor: pointer; }
+  #btnPrank { background: linear-gradient(#f24237, #d12e24); color: #fff; margin-top: 26px;
+              box-shadow: 0 8px 24px rgba(242,66,55,.4); }
+  #btnApp { background: rgba(255,255,255,.12); color: #fff; border: 1px solid rgba(255,255,255,.25); }
+
+  /* ---------- composer ---------- */
+  #composer { position: fixed; inset: 0; z-index: 60; display: none; align-items: flex-end;
+              background: rgba(10,6,20,.55); }
+  #composer.on { display: flex; }
+  #compSheet { background: var(--cream); width: 100%; max-width: 480px; margin: 0 auto;
+               border-radius: 24px 24px 0 0; padding: 22px 20px 40px; color: var(--ink);
+               max-height: 86vh; overflow-y: auto; }
+  #compTitle { font-size: 20px; font-weight: 900; }
+  #compSub { font-size: 13px; color: var(--sub); margin-top: 4px; }
+  .preset { display: flex; align-items: center; gap: 12px; padding: 13px; margin-top: 10px;
+            background: var(--card); border: 1.5px solid var(--stroke); border-radius: 14px;
+            cursor: pointer; font-size: 14.5px; font-weight: 700; }
+  .preset.sel { border-color: var(--brand); background: #fff5f4; }
+  .preset .em { font-size: 22px; }
+  .preset .sub { display: block; font-size: 12px; color: var(--sub); font-weight: 500; margin-top: 2px; }
+  #genBtn { width: 100%; margin-top: 16px; padding: 16px; border-radius: 16px; border: none;
+            background: linear-gradient(#f24237, #d12e24); color: #fff; font-size: 16px;
+            font-weight: 800; cursor: pointer; }
+  #linkBox { display: none; margin-top: 14px; }
+  #linkText { width: 100%; padding: 12px; border-radius: 12px; border: 1px solid var(--stroke);
+              font-size: 12px; color: var(--sub); background: var(--card); word-break: break-all; }
+  .linkBtns { display: flex; gap: 10px; margin-top: 10px; }
+  .linkBtns button { flex: 1; padding: 13px; border-radius: 13px; border: none; font-size: 14px;
+                     font-weight: 800; cursor: pointer; }
+  #copyBtn { background: var(--ink); color: #fff; }
+  #shareBtn { background: var(--chip); color: var(--ink); }
+  #compClose { position: absolute; right: 18px; margin-top: -6px; font-size: 22px; color: var(--sub);
+               background: none; border: none; cursor: pointer; }
+  #copied { text-align: center; font-size: 13px; font-weight: 700; color: #1d8a4a;
+            margin-top: 8px; visibility: hidden; }
+</style>
+</head>
+<body>
+
+<div id="mapWrap">
+  <div id="liveBadge"><span id="liveDot"></span><span id="liveTxt">实时更新中</span></div>
+  <svg id="map" viewBox="0 0 480 400" preserveAspectRatio="xMidYMid slice">
+    <rect width="480" height="400" fill="#eceae2"/>
+    <!-- park + water flavor -->
+    <ellipse cx="88" cy="86" rx="86" ry="58" fill="#cfe2c0"/>
+    <ellipse cx="422" cy="330" rx="96" ry="64" fill="#cfe2c0"/>
+    <path d="M480 40 Q 430 70 470 130 L 480 130 Z" fill="#b8d8ea"/>
+    <!-- city blocks -->
+    <g fill="#e3e0d6">
+      <rect x="150" y="30"  width="90" height="60" rx="7"/>
+      <rect x="260" y="30"  width="80" height="60" rx="7"/>
+      <rect x="40"  y="170" width="80" height="70" rx="7"/>
+      <rect x="140" y="120" width="100" height="70" rx="7"/>
+      <rect x="260" y="115" width="90"  height="75" rx="7"/>
+      <rect x="370" y="90"  width="80"  height="90" rx="7"/>
+      <rect x="60"  y="270" width="90"  height="60" rx="7"/>
+      <rect x="170" y="225" width="90"  height="65" rx="7"/>
+      <rect x="280" y="215" width="80"  height="70" rx="7"/>
+      <rect x="180" y="315" width="110" height="55" rx="7"/>
+    </g>
+    <!-- roads -->
+    <g stroke="#ffffff" stroke-width="10" stroke-linecap="round" fill="none">
+      <path d="M0 105 H480"/><path d="M0 205 H480"/><path d="M0 300 H480"/>
+      <path d="M130 0 V400"/><path d="M250 0 V400"/><path d="M362 0 V400"/>
+      <path d="M0 380 Q 200 340 480 205" stroke-width="13"/>
+    </g>
+    <g font-size="10" fill="#a8a69c" font-weight="600">
+      <text x="140" y="100">Great South Rd</text>
+      <text x="256" y="200">Main Hwy</text>
+      <text x="368" y="60" transform="rotate(90 368 60)">Church St</text>
+    </g>
+    <!-- delivery route -->
+    <path id="route" d="M96 96 L130 105 L250 105 L250 205 L362 205 L362 300 L410 316"
+          fill="none" stroke="#f24237" stroke-width="4.5" stroke-dasharray="9 7" stroke-linecap="round"/>
+  </svg>
+  <div class="pin" id="pinA">🍴</div>
+  <div class="pin" id="pinB">🏠</div>
+  <div class="pin" id="courier">🛵</div>
+</div>
+
+<div id="sheet">
+  <div class="handle"></div>
+  <div class="label" id="lblArrive">预计送达</div>
+  <div><span id="arrive">--:--</span><span id="etaSub"></span></div>
+  <div id="bar">
+    <div class="seg" style="flex:5.5"><i></i></div>
+    <div class="seg" style="flex:1.5"><i></i></div>
+    <div class="seg" style="flex:3"><i></i></div>
+  </div>
+  <div class="stageRow">
+    <div id="stageIcon">🔥</div>
+    <div id="stageTitle">商家制作中</div>
+    <div id="stageStep">1/3</div>
+  </div>
+  <div id="quip">骑手已接单，正在赶往商家…</div>
+
+  <div class="card">
+    <div class="courierRow">
+      <div class="courierAvatar" id="cAvatar">🧑🏽</div>
+      <div>
+        <div class="courierName" id="cName">骑手</div>
+        <div class="courierMeta" id="cMeta">丰田卡罗拉 · 已完成 1,204 单</div>
+      </div>
+      <div class="stars">⭐ 4.9</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div id="restName"></div>
+    <div id="items"></div>
+    <div class="totalRow"><span class="n" id="lblTotal">合计</span><span id="total"></span></div>
+  </div>
+</div>
+
+<!-- ---------- the punchline ---------- -->
+<div id="reveal">
+  <div id="ghostBig">👻</div>
+  <div id="rvTitle">这单外卖…消失了</div>
+  <div id="rvSub"></div>
+  <div id="rvStat"></div>
+  <button class="rvBtn" id="btnPrank"></button>
+  <button class="rvBtn" id="btnApp"></button>
+</div>
+
+<!-- ---------- prank composer: the loop closes here, no app needed ---------- -->
+<div id="composer">
+  <div id="compSheet">
+    <button id="compClose" onclick="closeComposer()">✕</button>
+    <div id="compTitle">30 秒做一单"假外卖"</div>
+    <div id="compSub">选一单，把链接发给下一个朋友。TA 会看到和你刚才一模一样的"实时配送"。</div>
+    <div id="presets"></div>
+    <button id="genBtn" onclick="generate()">生成整蛊链接</button>
+    <div id="linkBox">
+      <div id="linkText"></div>
+      <div class="linkBtns">
+        <button id="copyBtn" onclick="copyLink()">复制链接</button>
+        <button id="shareBtn" onclick="shareLink()">直接分享</button>
+      </div>
+      <div id="copied">已复制 · 去微信粘贴给朋友吧</div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  // ---------- read the "order" out of the URL ----------
+  const q = new URLSearchParams(location.search);
+  const now = () => Date.now() / 1000;
+  const zh = (q.get('l') || (navigator.language || 'zh').slice(0, 2)) === 'zh';
+
+  const T = zh ? {
+    live: '实时更新中', arrive: '预计送达', total: '合计',
+    stages: ['商家制作中', '骑手已取餐', '配送中'],
+    icons: ['🔥', '🛍️', '🛵'],
+    min: '分钟', km: '公里',
+    quips: ['骑手已接单，正在赶往商家…', '商家出餐有点慢，骑手在门口等…', '骑手正在等红灯…',
+            '前方有点堵，骑手换了条路…', '骑手把餐放进了保温箱…', '距离你越来越近了…'],
+    courierMeta: '丰田卡罗拉 · 已完成 1,204 单',
+    rvTitle: '这单外卖…消失了',
+    rvSub: n => `其实，<b>这单外卖从来不存在。</b><br>你刚刚被${n || '朋友'}整蛊了 —— 过去这几分钟，你一直在追踪一份幽灵外卖 👻`,
+    rvStat: m => `你白等了 <b>${m}</b> 分钟 · 目击者：0 人`,
+    btnPrank: '轮到你了 · 用同款骗一个朋友 →',
+    btnApp: '下载 NeverEats · 真地图整蛊版',
+    justVanished: '骑手到达时…人和外卖一起消失了',
+    presets: [
+      { em: '🧋', name: '喜茶 · 多肉葡萄×2', items: ['1×多肉葡萄', '1×芝芝莓莓'], total: '52.00', rest: '喜茶 HEYTEA' },
+      { em: '🍔', name: '麦当劳全家桶套餐', items: ['1×巨无霸套餐', '1×麦辣鸡翅', '1×可乐'], total: '68.50', rest: "McDonald's 麦当劳" },
+      { em: '🍣', name: '寿司拼盘 24 件', items: ['1×三文鱼拼盘', '1×加州卷'], total: '89.00', rest: 'Sushi Bay 寿司湾' },
+      { em: '🍗', name: '韩式炸鸡+啤酒', items: ['1×半半炸鸡', '2×可乐'], total: '75.00', rest: 'BBQ Chicken 韩式炸鸡' },
+      { em: '🌶️', name: '麻辣烫微辣一份', items: ['1×自选麻辣烫', '1×冰可乐'], total: '43.80', rest: '张亮麻辣烫' }
+    ],
+    compCopied: '已复制 · 去微信粘贴给朋友吧'
+  } : {
+    live: 'LIVE tracking', arrive: 'ARRIVING BY', total: 'Total',
+    stages: ['Preparing your order', 'Courier picked up', 'On the way to you'],
+    icons: ['🔥', '🛍️', '🛵'],
+    min: 'min', km: 'km',
+    quips: ['Courier accepted your order…', 'Kitchen is running slightly behind…', 'Courier is waiting at a red light…',
+            'Bit of traffic — rerouting…', 'Order sealed in the thermal bag…', 'Getting closer to you…'],
+    courierMeta: 'Toyota Corolla · 1,204 deliveries',
+    rvTitle: 'Your delivery… vanished',
+    rvSub: n => `Actually, <b>this order never existed.</b><br>You just got pranked by ${n || 'a friend'} — you've been tracking a ghost delivery 👻`,
+    rvStat: m => `You waited <b>${m}</b> minutes for nothing · Witnesses: 0`,
+    btnPrank: 'Your turn · prank a friend →',
+    btnApp: 'Get NeverEats · real-map edition',
+    justVanished: 'The courier arrived… and vanished with your food',
+    presets: [
+      { em: '🧋', name: 'Bubble tea ×2', items: ['2×Brown Sugar Boba'], total: '18.00', rest: 'Gong Cha' },
+      { em: '🍔', name: 'McDonald\'s combo', items: ['1×Big Mac Combo', '1×McSpicy'], total: '24.50', rest: "McDonald's" },
+      { em: '🍣', name: 'Sushi platter', items: ['1×Salmon Platter', '1×California Roll'], total: '42.00', rest: 'Sushi Bay' },
+      { em: '🍗', name: 'Korean fried chicken', items: ['1×Half & Half Chicken', '2×Cola'], total: '39.00', rest: 'BBQ Chicken' },
+      { em: '🍕', name: 'Pizza night', items: ['1×Pepperoni Large', '1×Garlic Bread'], total: '31.00', rest: "Domino's" }
+    ],
+    compCopied: 'Copied · paste it to a friend'
+  };
+
+  // Order params (with believable defaults so a bare link still works)
+  const arrival = parseFloat(q.get('a')) || (now() + 9 * 60);
+  const placed  = parseFloat(q.get('p')) || (arrival - 14 * 60);
+  const rest    = q.get('r') || (zh ? '喜茶 HEYTEA' : 'Gong Cha');
+  const items   = (q.get('i') || (zh ? '1×多肉葡萄|1×芝芝莓莓' : '2×Brown Sugar Boba')).split('|');
+  const total   = q.get('t') || '52.00';
+  const cur     = q.get('cur') || '$';
+  const cName   = q.get('c') || (zh ? '李伟' : 'Marcus J.');
+  const cEmoji  = q.get('ce') || '🧑🏽';
+  const sender  = q.get('n') || '';
+
+  const FR = [0.55, 0.15, 0.30];                    // prep / pickup / travel
+  const durTotal = Math.max(60, arrival - placed);  // seconds
+
+  // ---------- static fills ----------
+  const $ = id => document.getElementById(id);
+  $('liveTxt').textContent = T.live;
+  $('lblArrive').textContent = T.arrive;
+  $('lblTotal').textContent = T.total;
+  $('restName').textContent = rest;
+  $('items').innerHTML = items.map(s => {
+    const m = s.match(/^(\d+)[×x]\s*(.+)$/);
+    const qty = m ? m[1] : '1', name = m ? m[2] : s;
+    return `<div class="itemRow"><span style="color:var(--sub);width:26px">${qty}×</span><span class="n">${name}</span></div>`;
+  }).join('');
+  $('total').textContent = cur + total;
+  $('cName').textContent = cName;
+  $('cAvatar').textContent = cEmoji;
+  $('cMeta').textContent = T.courierMeta;
+  const arriveDate = new Date(arrival * 1000);
+  $('arrive').textContent = arriveDate.toTimeString().slice(0, 5);
+  $('btnPrank').textContent = T.btnPrank;
+  $('btnApp').textContent = T.btnApp;
+
+  // ---------- map geometry ----------
+  const route = $('route'), routeLen = route.getTotalLength();
+  const mapSvg = $('map');
+  function place(el, pt) {
+    // SVG viewBox → CSS pixels (slice-fit aware via getScreenCTM)
+    const ctm = route.getScreenCTM();
+    const p = new DOMPoint(pt.x, pt.y).matrixTransform(ctm);
+    const wrap = $('mapWrap').getBoundingClientRect();
+    el.style.left = (p.x - wrap.left) + 'px';
+    el.style.top = (p.y - wrap.top) + 'px';
+  }
+  function layoutPins(travel) {
+    place($('pinA'), route.getPointAtLength(0));
+    place($('pinB'), route.getPointAtLength(routeLen));
+    place($('courier'), route.getPointAtLength(routeLen * travel));
+  }
+
+  // ---------- live simulation ----------
+  const segs = document.querySelectorAll('.seg > i');
+  let quipIdx = 0, finished = false;
+  const lateOpen = now() >= arrival;
+  // Late openers still deserve the punchline: play a 3-second "final approach"
+  // replay, then vanish. Live openers watch the real countdown to the second.
+  const simStart = now();
+
+  function progressNow() {
+    if (lateOpen) return Math.min(1, 0.9 + 0.1 * ((now() - simStart) / 3));
+    return Math.min(1, (now() - placed) / durTotal);
+  }
+  function stageOf(p) {
+    if (p < FR[0]) return 0;
+    if (p < FR[0] + FR[1]) return 1;
+    return 2;
+  }
+  function fillOf(p, idx) {
+    const start = FR.slice(0, idx).reduce((a, b) => a + b, 0);
+    return Math.min(1, Math.max(0, (p - start) / FR[idx]));
+  }
+
+  function tick() {
+    if (finished) return;
+    const p = progressNow();
+    const st = stageOf(p);
+    segs.forEach((el, i) => el.style.width = (fillOf(p, i) * 100) + '%');
+    $('stageTitle').textContent = T.stages[st];
+    $('stageIcon').textContent = T.icons[st];
+    $('stageStep').textContent = (st + 1) + '/3';
+    const etaMin = Math.max(1, Math.ceil((arrival - now()) / 60));
+    $('etaSub').textContent = lateOpen ? '· ' + T.stages[2]
+      : `· ${etaMin} ${T.min}`;
+    const travel = st < 2 ? 0 : fillOf(p, 2);
+    layoutPins(travel);
+    if (p >= 1) { finished = true; vanish(); }
+  }
+
+  function rotateQuip() {
+    if (finished) return;
+    quipIdx = (quipIdx + 1) % T.quips.length;
+    const el = $('quip');
+    el.style.opacity = 0;
+    setTimeout(() => { el.textContent = T.quips[quipIdx]; el.style.opacity = 1; }, 350);
+  }
+
+  // ---------- the punchline ----------
+  function vanish() {
+    $('courier').classList.add('vanish');
+    $('mapWrap').classList.add('dead');
+    $('quip').textContent = T.justVanished;
+    setTimeout(() => {
+      const waited = lateOpen ? 3 : Math.max(1, Math.round((now() - simStart) / 60));
+      $('rvSub').innerHTML = T.rvSub(sender ? decodeURIComponent(sender) : '');
+      $('rvStat').innerHTML = T.rvStat(lateOpen ? '0.05' : waited);
+      const rv = $('reveal');
+      rv.classList.add('on');
+      requestAnimationFrame(() => requestAnimationFrame(() => rv.classList.add('show')));
+    }, 1900);
+  }
+
+  // ---------- composer: victim → next prankster, right here ----------
+  let selPreset = 0;
+  function openComposer() {
+    const box = $('presets');
+    if (!box.children.length) {
+      T.presets.forEach((pr, i) => {
+        const d = document.createElement('div');
+        d.className = 'preset' + (i === 0 ? ' sel' : '');
+        d.innerHTML = `<span class="em">${pr.em}</span><span>${pr.name}<span class="sub">${pr.rest} · ${cur}${pr.total}</span></span>`;
+        d.onclick = () => {
+          selPreset = i;
+          document.querySelectorAll('.preset').forEach(x => x.classList.remove('sel'));
+          d.classList.add('sel');
+          $('linkBox').style.display = 'none';
+        };
+        box.appendChild(d);
+      });
+    }
+    $('composer').classList.add('on');
+  }
+  window.closeComposer = () => $('composer').classList.remove('on');
+
+  window.generate = () => {
+    const pr = T.presets[selPreset];
+    const a2 = Math.round(now() + (8 + Math.random() * 4) * 60);   // arrives in 8–12 min
+    const p2 = Math.round(a2 - (13 + Math.random() * 4) * 60);
+    const u = new URL(location.origin + location.pathname);
+    u.searchParams.set('r', pr.rest);
+    u.searchParams.set('i', pr.items.join('|'));
+    u.searchParams.set('t', pr.total);
+    u.searchParams.set('cur', cur);
+    u.searchParams.set('a', a2);
+    u.searchParams.set('p', p2);
+    u.searchParams.set('c', cName);
+    u.searchParams.set('ce', cEmoji);
+    u.searchParams.set('l', zh ? 'zh' : 'en');
+    $('linkText').textContent = u.toString();
+    $('linkBox').style.display = 'block';
+  };index.html
+  window.copyLink = () => {
+    const t = $('linkText').textContent;
+    (navigator.clipboard ? navigator.clipboard.writeText(t)
+       : Promise.reject()).catch(() => {
+      const ta = document.createElement('textarea');
+      ta.value = t; document.body.appendChild(ta); ta.select();
+      document.execCommand('copy'); ta.remove();
+    });
+    const c = $('copied'); c.textContent = T.compCopied; c.style.visibility = 'visible';
+  };
+  window.shareLink = () => {
+    const t = $('linkText').textContent;
+    if (navigator.share) navigator.share({ title: document.title, url: t }).catch(() => {});
+    else window.copyLink();
+  };
+  $('btnPrank').onclick = openComposer;
+  $('btnApp').onclick = () => { location.href = 'https://github.com/Ashine621'; };
+
+  // ---------- go ----------
+  layoutPins(0);
+  window.addEventListener('resize', () => tick());
+  setInterval(tick, 1000);
+  setInterval(rotateQuip, 5000);
+  tick();
+})();
+</script>
+</body>
+</html>
