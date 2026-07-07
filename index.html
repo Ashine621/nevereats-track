@@ -23,7 +23,15 @@
   #mapWrap { position: relative; height: 46vh; min-height: 300px; overflow: hidden;
              background: #eceae2; transition: filter 1.2s ease; }
   #mapWrap.dead { filter: grayscale(1) brightness(.92); }
-  #map { width: 100%; height: 100%; display: block; }
+  /* real OpenStreetMap tiles + an SVG overlay for the route */
+  #tiles { position: absolute; inset: 0; overflow: hidden; }
+  #tiles img { position: absolute; width: 256px; height: 256px;
+               user-select: none; -webkit-user-drag: none; }
+  #ovl { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 2;
+         pointer-events: none; }
+  #mapAttr { position: absolute; bottom: 3px; right: 5px; z-index: 3;
+             font-size: 9px; color: #6a6a72; background: rgba(255,255,255,.6);
+             padding: 1px 5px; border-radius: 4px; }
   .pin { position: absolute; transform: translate(-50%, -50%); z-index: 3;
          width: 34px; height: 34px; border-radius: 50%; background: #fff;
          box-shadow: 0 3px 10px rgba(0,0,0,.22); display: flex; align-items: center;
@@ -135,43 +143,15 @@
 
 <div id="mapWrap">
   <div id="liveBadge"><span id="liveDot"></span><span id="liveTxt">实时更新中</span></div>
-  <svg id="map" viewBox="0 0 480 400" preserveAspectRatio="xMidYMid slice">
-    <rect width="480" height="400" fill="#eceae2"/>
-    <!-- park + water flavor -->
-    <ellipse cx="88" cy="86" rx="86" ry="58" fill="#cfe2c0"/>
-    <ellipse cx="422" cy="330" rx="96" ry="64" fill="#cfe2c0"/>
-    <path d="M480 40 Q 430 70 470 130 L 480 130 Z" fill="#b8d8ea"/>
-    <!-- city blocks -->
-    <g fill="#e3e0d6">
-      <rect x="150" y="30"  width="90" height="60" rx="7"/>
-      <rect x="260" y="30"  width="80" height="60" rx="7"/>
-      <rect x="40"  y="170" width="80" height="70" rx="7"/>
-      <rect x="140" y="120" width="100" height="70" rx="7"/>
-      <rect x="260" y="115" width="90"  height="75" rx="7"/>
-      <rect x="370" y="90"  width="80"  height="90" rx="7"/>
-      <rect x="60"  y="270" width="90"  height="60" rx="7"/>
-      <rect x="170" y="225" width="90"  height="65" rx="7"/>
-      <rect x="280" y="215" width="80"  height="70" rx="7"/>
-      <rect x="180" y="315" width="110" height="55" rx="7"/>
-    </g>
-    <!-- roads -->
-    <g stroke="#ffffff" stroke-width="10" stroke-linecap="round" fill="none">
-      <path d="M0 105 H480"/><path d="M0 205 H480"/><path d="M0 300 H480"/>
-      <path d="M130 0 V400"/><path d="M250 0 V400"/><path d="M362 0 V400"/>
-      <path d="M0 380 Q 200 340 480 205" stroke-width="13"/>
-    </g>
-    <g font-size="10" fill="#a8a69c" font-weight="600">
-      <text x="140" y="100">Great South Rd</text>
-      <text x="256" y="200">Main Hwy</text>
-      <text x="368" y="60" transform="rotate(90 368 60)">Church St</text>
-    </g>
-    <!-- delivery route -->
-    <path id="route" d="M96 96 L130 105 L250 105 L250 205 L362 205 L362 300 L410 316"
-          fill="none" stroke="#f24237" stroke-width="4.5" stroke-dasharray="9 7" stroke-linecap="round"/>
-  </svg>
+  <!-- real map: OpenStreetMap tiles rendered from the order's coordinates,
+       so the friend sees the same real streets/route the app showed -->
+  <div id="tiles"></div>
+  <svg id="ovl"><path id="route" fill="none" stroke="#f24237" stroke-width="4.5"
+       stroke-dasharray="9 7" stroke-linecap="round" stroke-linejoin="round"/></svg>
   <div class="pin" id="pinA">🍴</div>
   <div class="pin" id="pinB">🏠</div>
   <div class="pin" id="courier">🛵</div>
+  <div id="mapAttr">© OpenStreetMap</div>
 </div>
 
 <div id="sheet">
@@ -300,6 +280,15 @@
   const cName   = q.get('c') || (zh ? '李伟' : 'Marcus J.');
   const cEmoji  = q.get('ce') || '🧑🏽';
   const sender  = q.get('n') || '';
+  // Real coordinates from the app (default: Auckland CBD → One Tree Hill).
+  const R = { lat: parseFloat(q.get('rlat')) || -36.8509, lng: parseFloat(q.get('rlng')) || 174.7645 };
+  const H = { lat: parseFloat(q.get('hlat')) || -36.8931, lng: parseFloat(q.get('hlng')) || 174.7876 };
+  // Downsampled driving route "lat,lng;lat,lng;…" — falls back to R→H.
+  const routePts = (q.get('poly') || '').split(';').map(s => {
+    const [la, ln] = s.split(',').map(parseFloat);
+    return (isFinite(la) && isFinite(ln)) ? { lat: la, lng: ln } : null;
+  }).filter(Boolean);
+  const path = routePts.length >= 2 ? routePts : [R, H];
 
   const FR = [0.55, 0.15, 0.30];                    // prep / pickup / travel
   const durTotal = Math.max(60, arrival - placed);  // seconds
@@ -324,21 +313,81 @@
   $('btnPrank').textContent = T.btnPrank;
   $('btnApp').textContent = T.btnApp;
 
-  // ---------- map geometry ----------
-  const route = $('route'), routeLen = route.getTotalLength();
-  const mapSvg = $('map');
-  function place(el, pt) {
-    // SVG viewBox → CSS pixels (slice-fit aware via getScreenCTM)
-    const ctm = route.getScreenCTM();
-    const p = new DOMPoint(pt.x, pt.y).matrixTransform(ctm);
-    const wrap = $('mapWrap').getBoundingClientRect();
-    el.style.left = (p.x - wrap.left) + 'px';
-    el.style.top = (p.y - wrap.top) + 'px';
+  // ---------- real map (OpenStreetMap slippy tiles) ----------
+  const TILE = 256;
+  const worldX = (lng, z) => (lng + 180) / 360 * TILE * (1 << z);
+  const worldY = (lat, z) => {
+    const s = Math.sin(lat * Math.PI / 180);
+    return (0.5 - Math.log((1 + s) / (1 - s)) / (4 * Math.PI)) * TILE * (1 << z);
+  };
+  let mapZ = 13, originX = 0, originY = 0;   // top-left world px of the viewport
+  let projPath = [], cumLen = [], totalLen = 0;
+
+  function chooseZoom(vw, vh) {
+    const pad = 70;
+    for (let z = 17; z >= 3; z--) {
+      const xs = path.map(p => worldX(p.lng, z)), ys = path.map(p => worldY(p.lat, z));
+      if (Math.max(...xs) - Math.min(...xs) < vw - 2 * pad &&
+          Math.max(...ys) - Math.min(...ys) < vh - 2 * pad) return z;
+    }
+    return 12;
   }
-  function layoutPins(travel) {
-    place($('pinA'), route.getPointAtLength(0));
-    place($('pinB'), route.getPointAtLength(routeLen));
-    place($('courier'), route.getPointAtLength(routeLen * travel));
+  const proj = p => ({ x: worldX(p.lng, mapZ) - originX, y: worldY(p.lat, mapZ) - originY });
+
+  function renderMap() {
+    const wrap = $('mapWrap');
+    const vw = wrap.clientWidth, vh = wrap.clientHeight;
+    mapZ = chooseZoom(vw, vh);
+    const cx = (Math.min(...path.map(p => worldX(p.lng, mapZ))) + Math.max(...path.map(p => worldX(p.lng, mapZ)))) / 2;
+    const cy = (Math.min(...path.map(p => worldY(p.lat, mapZ))) + Math.max(...path.map(p => worldY(p.lat, mapZ)))) / 2;
+    originX = cx - vw / 2;
+    originY = cy - vh / 2;
+
+    // lay down the tile grid
+    const box = $('tiles'); box.innerHTML = '';
+    const n = 1 << mapZ;
+    const x0 = Math.floor(originX / TILE), x1 = Math.floor((originX + vw) / TILE);
+    const y0 = Math.floor(originY / TILE), y1 = Math.floor((originY + vh) / TILE);
+    for (let tx = x0; tx <= x1; tx++) for (let ty = y0; ty <= y1; ty++) {
+      if (ty < 0 || ty >= n) continue;
+      const img = document.createElement('img');
+      img.loading = 'eager';
+      img.src = `https://tile.openstreetmap.org/${mapZ}/${((tx % n) + n) % n}/${ty}.png`;
+      img.style.left = (tx * TILE - originX) + 'px';
+      img.style.top = (ty * TILE - originY) + 'px';
+      box.appendChild(img);
+    }
+
+    // project the route, size the overlay, draw the dashed path
+    projPath = path.map(proj);
+    const svg = $('ovl'); svg.setAttribute('viewBox', `0 0 ${vw} ${vh}`);
+    $('route').setAttribute('d', 'M' + projPath.map(p => `${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(' L'));
+    cumLen = [0];
+    for (let i = 1; i < projPath.length; i++) {
+      const dx = projPath[i].x - projPath[i - 1].x, dy = projPath[i].y - projPath[i - 1].y;
+      cumLen[i] = cumLen[i - 1] + Math.hypot(dx, dy);
+    }
+    totalLen = cumLen[cumLen.length - 1] || 1;
+
+    // static endpoints
+    setPin($('pinA'), projPath[0]);
+    setPin($('pinB'), projPath[projPath.length - 1]);
+  }
+
+  function setPin(el, pt) { el.style.left = pt.x + 'px'; el.style.top = pt.y + 'px'; }
+
+  // Courier position at fraction t (0..1) along the projected route.
+  function layoutPins(t) {
+    const target = t * totalLen;
+    let i = 1;
+    while (i < cumLen.length && cumLen[i] < target) i++;
+    if (i >= projPath.length) { setPin($('courier'), projPath[projPath.length - 1]); return; }
+    const seg = cumLen[i] - cumLen[i - 1] || 1;
+    const f = (target - cumLen[i - 1]) / seg;
+    setPin($('courier'), {
+      x: projPath[i - 1].x + (projPath[i].x - projPath[i - 1].x) * f,
+      y: projPath[i - 1].y + (projPath[i].y - projPath[i - 1].y) * f
+    });
   }
 
   // ---------- live simulation ----------
@@ -440,7 +489,7 @@
     u.searchParams.set('l', zh ? 'zh' : 'en');
     $('linkText').textContent = u.toString();
     $('linkBox').style.display = 'block';
-  };index.html
+  };
   window.copyLink = () => {
     const t = $('linkText').textContent;
     (navigator.clipboard ? navigator.clipboard.writeText(t)
@@ -460,8 +509,9 @@
   $('btnApp').onclick = () => { location.href = 'https://github.com/Ashine621'; };
 
   // ---------- go ----------
+  renderMap();
   layoutPins(0);
-  window.addEventListener('resize', () => tick());
+  window.addEventListener('resize', () => { renderMap(); tick(); });
   setInterval(tick, 1000);
   setInterval(rotateQuip, 5000);
   tick();
