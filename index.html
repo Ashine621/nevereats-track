@@ -3,10 +3,20 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<!-- Disguise: the link card a friend receives must read like a real order. -->
+<!-- Disguise: the link card a friend receives (WeChat / IG / etc.) must read
+     like a real order. OG tags are read from static HTML by the crawler, so
+     they're the same for every link; the per-order detail shows after opening. -->
 <title>外卖配送中 · 订单实时跟踪</title>
-<meta property="og:title" content="你的外卖正在配送中">
-<meta property="og:description" content="骑手已接单，点击查看实时位置 →">
+<meta property="og:type" content="website">
+<meta property="og:title" content="🛵 你的外卖正在配送中…">
+<meta property="og:description" content="骑手已接单，点击查看实时位置和预计送达时间 →">
+<meta property="og:image" content="https://images.unsplash.com/photo-1558857563-b371033873b8?w=1200&h=630&fit=crop&q=80">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="🛵 你的外卖正在配送中…">
+<meta name="twitter:description" content="骑手已接单，点击查看实时位置 →">
+<meta name="twitter:image" content="https://images.unsplash.com/photo-1558857563-b371033873b8?w=1200&h=630&fit=crop&q=80">
 <style>
   :root {
     --brand: #f24237; --brand-dark: #d12e24;
@@ -245,7 +255,9 @@
       { em: '🍗', name: '韩式炸鸡+啤酒', items: ['1×半半炸鸡', '2×可乐'], total: '75.00', rest: 'BBQ Chicken 韩式炸鸡' },
       { em: '🌶️', name: '麻辣烫微辣一份', items: ['1×自选麻辣烫', '1×冰可乐'], total: '43.80', rest: '张亮麻辣烫' }
     ],
-    compCopied: '已复制 · 去微信粘贴给朋友吧'
+    compCopied: '已复制 · 去微信粘贴给朋友吧',
+    compTitle: '30 秒做一单"假外卖"', compSub: '选一单，把链接发给下一个朋友。TA 会看到和你刚才一模一样的"实时配送"。',
+    genBtn: '生成整蛊链接', copyBtn: '复制链接', shareBtn: '直接分享'
   } : {
     live: 'LIVE tracking', arrive: 'ARRIVING BY', total: 'Total',
     stages: ['Preparing your order', 'Courier picked up', 'On the way to you'],
@@ -267,7 +279,9 @@
       { em: '🍗', name: 'Korean fried chicken', items: ['1×Half & Half Chicken', '2×Cola'], total: '39.00', rest: 'BBQ Chicken' },
       { em: '🍕', name: 'Pizza night', items: ['1×Pepperoni Large', '1×Garlic Bread'], total: '31.00', rest: "Domino's" }
     ],
-    compCopied: 'Copied · paste it to a friend'
+    compCopied: 'Copied · paste it to a friend',
+    compTitle: 'Make a fake order in 30s', compSub: 'Pick one and send the link to your next friend. They’ll see the exact same "live delivery" you just did.',
+    genBtn: 'Generate prank link', copyBtn: 'Copy link', shareBtn: 'Share'
   };
 
   // Order params (with believable defaults so a bare link still works)
@@ -312,6 +326,14 @@
   $('arrive').textContent = arriveDate.toTimeString().slice(0, 5);
   $('btnPrank').textContent = T.btnPrank;
   $('btnApp').textContent = T.btnApp;
+  // Composer chrome — was hard-coded Chinese; now follows the link language.
+  $('compTitle').textContent = T.compTitle;
+  $('compSub').textContent = T.compSub;
+  $('genBtn').textContent = T.genBtn;
+  $('copyBtn').textContent = T.copyBtn;
+  $('shareBtn').textContent = T.shareBtn;
+  $('quip').textContent = T.quips[0];
+  $('stageTitle').textContent = T.stages[0];
 
   // ---------- real map (OpenStreetMap slippy tiles) ----------
   const TILE = 256;
@@ -391,16 +413,17 @@
   }
 
   // ---------- live simulation ----------
+  // The SHARED page is a quick gag, not a real 15-min wait: it always plays
+  // the three stages over ~13 seconds, then the order vanishes. The ETA text
+  // still shows a believable "X min" so it reads like a real tracker.
+  const SIM_SECONDS = 13;
+  const promisedMin = Math.max(2, Math.round((arrival - placed) / 60));  // what it "should" take
   const segs = document.querySelectorAll('.seg > i');
   let quipIdx = 0, finished = false;
-  const lateOpen = now() >= arrival;
-  // Late openers still deserve the punchline: play a 3-second "final approach"
-  // replay, then vanish. Live openers watch the real countdown to the second.
   const simStart = now();
 
   function progressNow() {
-    if (lateOpen) return Math.min(1, 0.9 + 0.1 * ((now() - simStart) / 3));
-    return Math.min(1, (now() - placed) / durTotal);
+    return Math.min(1, (now() - simStart) / SIM_SECONDS);
   }
   function stageOf(p) {
     if (p < FR[0]) return 0;
@@ -420,9 +443,9 @@
     $('stageTitle').textContent = T.stages[st];
     $('stageIcon').textContent = T.icons[st];
     $('stageStep').textContent = (st + 1) + '/3';
-    const etaMin = Math.max(1, Math.ceil((arrival - now()) / 60));
-    $('etaSub').textContent = lateOpen ? '· ' + T.stages[2]
-      : `· ${etaMin} ${T.min}`;
+    // Believable ETA that gently ticks down but never reaches 0 before the gag.
+    const etaMin = Math.max(2, promisedMin - Math.floor(p * (promisedMin - 2)));
+    $('etaSub').textContent = `· ${etaMin} ${T.min}`;
     const travel = st < 2 ? 0 : fillOf(p, 2);
     layoutPins(travel);
     if (p >= 1) { finished = true; vanish(); }
@@ -442,9 +465,9 @@
     $('mapWrap').classList.add('dead');
     $('quip').textContent = T.justVanished;
     setTimeout(() => {
-      const waited = lateOpen ? 3 : Math.max(1, Math.round((now() - simStart) / 60));
+      $('rvTitle').textContent = T.rvTitle;    // was hard-coded Chinese
       $('rvSub').innerHTML = T.rvSub(sender ? decodeURIComponent(sender) : '');
-      $('rvStat').innerHTML = T.rvStat(lateOpen ? '0.05' : waited);
+      $('rvStat').innerHTML = T.rvStat(promisedMin);   // "…the X min you thought you'd wait"
       const rv = $('reveal');
       rv.classList.add('on');
       requestAnimationFrame(() => requestAnimationFrame(() => rv.classList.add('show')));
