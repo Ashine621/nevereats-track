@@ -30,26 +30,16 @@
          background: var(--cream); color: var(--ink); max-width: 480px; margin: 0 auto;
          min-height: 100vh; overflow-x: hidden; }
 
-  /* ---------- map ---------- */
+  /* ---------- map (real Apple MapKit JS — same basemap the app itself shows) ---------- */
   #mapWrap { position: relative; height: 46vh; min-height: 300px; overflow: hidden;
              background: #eceae2; transition: filter 1.2s ease; }
   #mapWrap.dead { filter: grayscale(1) brightness(.92); }
-  /* real OpenStreetMap tiles + an SVG overlay for the route */
-  #tiles { position: absolute; inset: 0; overflow: hidden; }
-  #tiles img { position: absolute; width: 256px; height: 256px;
-               user-select: none; -webkit-user-drag: none; }
-  #ovl { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 2;
-         pointer-events: none; }
-  #mapAttr { position: absolute; bottom: 3px; right: 5px; z-index: 3;
-             font-size: 9px; color: #6a6a72; background: rgba(255,255,255,.6);
-             padding: 1px 5px; border-radius: 4px; }
-  .pin { position: absolute; transform: translate(-50%, -50%); z-index: 3;
-         width: 34px; height: 34px; border-radius: 50%; background: #fff;
-         box-shadow: 0 3px 10px rgba(0,0,0,.22); display: flex; align-items: center;
-         justify-content: center; font-size: 16px; }
-  #courier { width: 42px; height: 42px; font-size: 22px; border: 2.5px solid var(--brand);
-             z-index: 4; transition: left .9s linear, top .9s linear; }
-  #courier.vanish { animation: poof 1.6s ease forwards; }
+  #map { position: absolute; inset: 0; }
+  .mkPin { transform: translate(-50%, -50%); width: 34px; height: 34px; border-radius: 50%;
+           background: #fff; box-shadow: 0 3px 10px rgba(0,0,0,.22); display: flex;
+           align-items: center; justify-content: center; font-size: 16px; }
+  .mkPin.courier { width: 42px; height: 42px; font-size: 22px; border: 2.5px solid var(--brand); }
+  .mkPin.courier.vanish { animation: poof 1.6s ease forwards; }
   @keyframes poof {
     0%   { transform: translate(-50%,-50%) scale(1); opacity: 1; }
     45%  { transform: translate(-50%,-110%) scale(1.25) rotate(-8deg); opacity: .95; }
@@ -154,15 +144,10 @@
 
 <div id="mapWrap">
   <div id="liveBadge"><span id="liveDot"></span><span id="liveTxt">实时更新中</span></div>
-  <!-- real map: OpenStreetMap tiles rendered from the order's coordinates,
-       so the friend sees the same real streets/route the app showed -->
-  <div id="tiles"></div>
-  <svg id="ovl"><path id="route" fill="none" stroke="#f24237" stroke-width="4.5"
-       stroke-dasharray="9 7" stroke-linecap="round" stroke-linejoin="round"/></svg>
-  <div class="pin" id="pinA">🍴</div>
-  <div class="pin" id="pinB">🏠</div>
-  <div class="pin" id="courier">🛵</div>
-  <div id="mapAttr">© OpenStreetMap</div>
+  <!-- real map: Apple MapKit JS — the same basemap style the app's own
+       MKMapSnapshotter share card uses. Kitchen/home/courier are custom
+       pins drawn on top, same as the in-app card. -->
+  <div id="map"></div>
 </div>
 
 <div id="sheet">
@@ -228,6 +213,8 @@
   </div>
 </div>
 
+<!-- Not async: our script below assumes window.mapkit exists once it runs. -->
+<script src="https://cdn.apple-mapkit.com/mk/5.x.x/mapkit.js" crossorigin></script>
 <script>
 (function () {
   // ---------- read the "order" out of the URL ----------
@@ -336,81 +323,84 @@
   $('quip').textContent = T.quips[0];
   $('stageTitle').textContent = T.stages[0];
 
-  // ---------- real map (OpenStreetMap slippy tiles) ----------
-  const TILE = 256;
-  const worldX = (lng, z) => (lng + 180) / 360 * TILE * (1 << z);
-  const worldY = (lat, z) => {
-    const s = Math.sin(lat * Math.PI / 180);
-    return (0.5 - Math.log((1 + s) / (1 - s)) / (4 * Math.PI)) * TILE * (1 << z);
-  };
-  let mapZ = 13, originX = 0, originY = 0;   // top-left world px of the viewport
-  let projPath = [], cumLen = [], totalLen = 0;
+  // ---------- real map (Apple MapKit JS — same basemap the app shows) ----------
+  // Token: ES256 JWT signed with the NeverEats MapKit JS key (Team SY3U7QWZQD,
+  // Key ID 83933KU36A), scoped to this exact origin via the `origin` claim.
+  // Expires 2027-01-13 — regenerate with the same Key ID + saved .p8 before
+  // then (header {alg:ES256,kid,typ:JWT}, payload {iss:team id,iat,exp,origin}).
+  const MAPKIT_TOKEN = "eyJhbGciOiJFUzI1NiIsImtpZCI6IjgzOTMzS1UzNkEiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJTWTNVN1FXWlFEIiwiaWF0IjoxNzg0MjYxODI1LCJleHAiOjE3OTk4MTM4MjUsIm9yaWdpbiI6Imh0dHBzOi8vYXNoaW5lNjIxLmdpdGh1Yi5pbyJ9.2pr18IpnjObf9GoiB_plL7u63mWMOCG2EP79HZnczBbyOLFDkRVI36wTyNdWgDdgw7Pnt47uRRXQL0Pt9WNoVw";
 
-  function chooseZoom(vw, vh) {
-    const pad = 70;
-    for (let z = 17; z >= 3; z--) {
-      const xs = path.map(p => worldX(p.lng, z)), ys = path.map(p => worldY(p.lat, z));
-      if (Math.max(...xs) - Math.min(...xs) < vw - 2 * pad &&
-          Math.max(...ys) - Math.min(...ys) < vh - 2 * pad) return z;
-    }
-    return 12;
+  let map, courierAnno;
+  // Cumulative distance along `path` in raw lat/lng units — city-scale, so
+  // flat-earth distance is an adequate proxy for proportional placement.
+  let cumLen = [0], totalLen = 1;
+  for (let i = 1; i < path.length; i++) {
+    const dx = path[i].lng - path[i - 1].lng, dy = path[i].lat - path[i - 1].lat;
+    cumLen[i] = cumLen[i - 1] + Math.hypot(dx, dy);
   }
-  const proj = p => ({ x: worldX(p.lng, mapZ) - originX, y: worldY(p.lat, mapZ) - originY });
+  totalLen = cumLen[cumLen.length - 1] || 1;
 
-  function renderMap() {
-    const wrap = $('mapWrap');
-    const vw = wrap.clientWidth, vh = wrap.clientHeight;
-    mapZ = chooseZoom(vw, vh);
-    const cx = (Math.min(...path.map(p => worldX(p.lng, mapZ))) + Math.max(...path.map(p => worldX(p.lng, mapZ)))) / 2;
-    const cy = (Math.min(...path.map(p => worldY(p.lat, mapZ))) + Math.max(...path.map(p => worldY(p.lat, mapZ)))) / 2;
-    originX = cx - vw / 2;
-    originY = cy - vh / 2;
-
-    // lay down the tile grid
-    const box = $('tiles'); box.innerHTML = '';
-    const n = 1 << mapZ;
-    const x0 = Math.floor(originX / TILE), x1 = Math.floor((originX + vw) / TILE);
-    const y0 = Math.floor(originY / TILE), y1 = Math.floor((originY + vh) / TILE);
-    for (let tx = x0; tx <= x1; tx++) for (let ty = y0; ty <= y1; ty++) {
-      if (ty < 0 || ty >= n) continue;
-      const img = document.createElement('img');
-      img.loading = 'eager';
-      img.src = `https://tile.openstreetmap.org/${mapZ}/${((tx % n) + n) % n}/${ty}.png`;
-      img.style.left = (tx * TILE - originX) + 'px';
-      img.style.top = (ty * TILE - originY) + 'px';
-      box.appendChild(img);
-    }
-
-    // project the route, size the overlay, draw the dashed path
-    projPath = path.map(proj);
-    const svg = $('ovl'); svg.setAttribute('viewBox', `0 0 ${vw} ${vh}`);
-    $('route').setAttribute('d', 'M' + projPath.map(p => `${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(' L'));
-    cumLen = [0];
-    for (let i = 1; i < projPath.length; i++) {
-      const dx = projPath[i].x - projPath[i - 1].x, dy = projPath[i].y - projPath[i - 1].y;
-      cumLen[i] = cumLen[i - 1] + Math.hypot(dx, dy);
-    }
-    totalLen = cumLen[cumLen.length - 1] || 1;
-
-    // static endpoints
-    setPin($('pinA'), projPath[0]);
-    setPin($('pinB'), projPath[projPath.length - 1]);
-  }
-
-  function setPin(el, pt) { el.style.left = pt.x + 'px'; el.style.top = pt.y + 'px'; }
-
-  // Courier position at fraction t (0..1) along the projected route.
-  function layoutPins(t) {
+  function coordAt(t) {
     const target = t * totalLen;
     let i = 1;
     while (i < cumLen.length && cumLen[i] < target) i++;
-    if (i >= projPath.length) { setPin($('courier'), projPath[projPath.length - 1]); return; }
+    if (i >= path.length) return path[path.length - 1];
     const seg = cumLen[i] - cumLen[i - 1] || 1;
     const f = (target - cumLen[i - 1]) / seg;
-    setPin($('courier'), {
-      x: projPath[i - 1].x + (projPath[i].x - projPath[i - 1].x) * f,
-      y: projPath[i - 1].y + (projPath[i].y - projPath[i - 1].y) * f
+    return {
+      lat: path[i - 1].lat + (path[i].lat - path[i - 1].lat) * f,
+      lng: path[i - 1].lng + (path[i].lng - path[i - 1].lng) * f
+    };
+  }
+
+  function pinFactory(emoji, extraClass) {
+    return () => {
+      const d = document.createElement('div');
+      d.className = 'mkPin' + (extraClass ? ' ' + extraClass : '');
+      d.textContent = emoji;
+      return d;
+    };
+  }
+
+  function renderMap() {
+    mapkit.init({ authorizationCallback: done => done(MAPKIT_TOKEN) });
+    map = new mapkit.Map('map', {
+      showsZoomControl: true,
+      showsCompass: mapkit.FeatureVisibility.Hidden,
+      showsMapTypeControl: false,
+      isRotationEnabled: false,
+      colorScheme: mapkit.Map.ColorSchemes.Light   // matches the page's light theme regardless of device dark mode
     });
+
+    const routeCoords = path.map(p => new mapkit.Coordinate(p.lat, p.lng));
+    const routeOverlay = new mapkit.PolylineOverlay(routeCoords, {
+      style: new mapkit.Style({
+        lineWidth: 4.5, strokeColor: '#f24237',
+        lineJoin: 'round', lineCap: 'round', lineDash: [9, 7]
+      })
+    });
+    map.addOverlay(routeOverlay);
+
+    const restAnno = new mapkit.Annotation(new mapkit.Coordinate(R.lat, R.lng), pinFactory('🍴'));
+    const homeAnno = new mapkit.Annotation(new mapkit.Coordinate(H.lat, H.lng), pinFactory('🏠'));
+    courierAnno = new mapkit.Annotation(new mapkit.Coordinate(path[0].lat, path[0].lng), pinFactory('🛵', 'courier'));
+    map.addAnnotation(restAnno);
+    map.addAnnotation(homeAnno);
+    map.addAnnotation(courierAnno);
+
+    map.showItems([routeOverlay, restAnno, homeAnno, courierAnno], {
+      animate: false,
+      padding: new mapkit.Padding({ top: 60, right: 40, bottom: 40, left: 40 })
+    });
+  }
+
+  // Courier position at fraction t (0..1) along the route — MapKit JS
+  // animates annotation coordinate changes natively, so this alone gives
+  // the smooth glide the old pixel-projected version had to do by hand.
+  function layoutPins(t) {
+    if (!courierAnno) return;
+    const c = coordAt(t);
+    courierAnno.coordinate = new mapkit.Coordinate(c.lat, c.lng);
   }
 
   // ---------- live simulation ----------
@@ -462,7 +452,7 @@
 
   // ---------- the punchline ----------
   function vanish() {
-    $('courier').classList.add('vanish');
+    if (courierAnno && courierAnno.element) courierAnno.element.classList.add('vanish');
     $('mapWrap').classList.add('dead');
     $('quip').textContent = T.justVanished;
     setTimeout(() => {
@@ -535,7 +525,7 @@
   // ---------- go ----------
   renderMap();
   layoutPins(0);
-  window.addEventListener('resize', () => { renderMap(); tick(); });
+  window.addEventListener('resize', tick);
   setInterval(tick, 1000);
   setInterval(rotateQuip, 5000);
   tick();
